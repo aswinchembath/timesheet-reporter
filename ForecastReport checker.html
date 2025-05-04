@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Weekly Project/Release Mismatch Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    .dropdown-checkbox-list { max-height: 220px; overflow-y: auto; }
+    .dropdown-checkbox-list input[type="checkbox"] { accent-color: #2563eb; }
+    .dropdown-checkbox-list label { cursor: pointer; }
+    .dropdown-search { width: 100%; }
+    .dropdown-box { min-width: 180px; }
+    .dropdown-box.open { z-index: 40; }
+    .dropdown-box ul { margin-bottom: 0; }
+    .dropdown-selected { min-height: 2.25rem; }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+<div class="container mx-auto p-6">
+  <div class="bg-white shadow-lg rounded-2xl p-8">
+    <h1 class="text-3xl font-bold text-center mb-6 text-blue-800">
+      Weekly Project/Release Mismatch Dashboard
+    </h1>
+    <div class="flex flex-col sm:flex-row items-center justify-center mb-6 gap-2">
+      <input type="file" id="fileInput" accept=".xlsx" class="border p-2 rounded-lg bg-white" />
+      <button id="processBtn" disabled class="bg-green-500 text-white px-6 py-2 rounded-lg hover:bg-green-600 disabled:opacity-50">Upload & Generate</button>
+      <button id="clearBtn" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 ml-2">Clear Filters</button>
+      <button id="resetBtn" class="bg-blue-200 text-blue-800 px-4 py-2 rounded-lg hover:bg-blue-300 ml-2">Reset Filters</button>
+    </div>
+    <div class="mb-4">
+      <nav class="flex space-x-2" id="tabNav">
+        <button id="tabDetail" class="tabBtn px-4 py-2 rounded-t font-semibold bg-blue-100 text-blue-800 border-b-2 border-blue-600">Detail View</button>
+        <button id="tabProject" class="tabBtn px-4 py-2 rounded-t font-semibold text-gray-500 bg-gray-50 border-b-2 border-transparent">Project Consolidated</button>
+      </nav>
+    </div>
+    <div id="filters" class="hidden mb-6 grid grid-cols-1 sm:grid-cols-5 gap-4">
+      <div>
+        <label class="block text-sm font-medium">Project/Application</label>
+        <div id="projectAppFilter" class="dropdown-box relative"></div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium">Release</label>
+        <div id="releaseFilter" class="dropdown-box relative"></div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium">Resource</label>
+        <div id="resourceFilter" class="dropdown-box relative"></div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium">Week</label>
+        <div id="weekFilter" class="dropdown-box relative"></div>
+      </div>
+      <div id="summaryWidget" class="p-4 bg-blue-50 rounded-lg flex flex-col justify-center">
+        <div class="flex flex-row gap-2 justify-center">
+          <span class="text-xs bg-blue-200 text-blue-800 px-2 py-1 rounded" id="totalForecast">Forecast: 0</span>
+          <span class="text-xs bg-emerald-200 text-emerald-800 px-2 py-1 rounded" id="totalActual">Actual: 0</span>
+          <span class="text-xs px-2 py-1 rounded font-bold" id="totalDiff">Diff: 0</span>
+        </div>
+      </div>
+    </div>
+    <div id="detailView" class="hidden space-y-4"></div>
+    <div id="consolidatedView" class="hidden space-y-4"></div>
+  </div>
+</div>
+<script>
+// -- Multiselect Dropdown (unchanged from previous, robust) --
+function createMultiSelectDropdown({id, options, selected, placeholder, onChange, search=true}) {
+  const container = document.getElementById(id);
+  container.innerHTML = '';
+  container.classList.add('dropdown-box');
+  let show = false;
+  let filter = '';
+  let _options = options.slice();
+  let _selected = new Set(selected || []);
+  const wrapper = document.createElement('div');
+  wrapper.className = 'relative';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'dropdown-selected border bg-white rounded-lg w-full text-left p-2 flex flex-wrap min-h-[2.25rem] items-center';
+  button.innerHTML = `<span class="truncate">${_selected.size ? Array.from(_selected).join(', ') : placeholder}</span>
+    <svg class="ml-auto h-5 w-5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path d="M19 9l-7 7-7-7"/>
+    </svg>`;
+  wrapper.appendChild(button);
+  const dropdown = document.createElement('div');
+  dropdown.className = 'absolute bg-white border mt-1 z-30 rounded-lg shadow-lg w-full hidden';
+  dropdown.style.minWidth = '180px';
+  dropdown.innerHTML = `
+    <div class="p-2 border-b space-x-1 bg-gray-50">
+      <button type="button" class="text-xs px-2 py-1 rounded bg-blue-100 hover:bg-blue-200" data-action="checkall">Check All</button>
+      <button type="button" class="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200" data-action="uncheckall">Uncheck All</button>
+    </div>
+    ${search ? `<div class="p-2 border-b"><input type="search" class="dropdown-search border rounded w-full p-1" placeholder="Search..." /></div>` : ''}
+    <ul class="dropdown-checkbox-list px-2 py-1"></ul>
+  `;
+  wrapper.appendChild(dropdown);
+  container.appendChild(wrapper);
+
+  function close() { dropdown.classList.add('hidden'); show = false;}
+  function open() { dropdown.classList.remove('hidden'); show = true; updateList(); }
+  function updateButton() {
+    button.querySelector('span').textContent = _selected.size ? Array.from(_selected).join(', ') : placeholder;
+  }
+  function updateList() {
+    const list = dropdown.querySelector('ul');
+    list.innerHTML = '';
+    let filtered = _options.filter(opt => opt && opt.toLowerCase().includes(filter.toLowerCase()));
+    if (filtered.length === 0) {
+      list.innerHTML = `<li class="text-xs text-gray-400 px-2 py-1">No options</li>`;
+      return;
+    }
+    filtered.forEach(opt => {
+      const li = document.createElement('li');
+      li.className = 'flex items-center space-x-2 px-1 py-1';
+      li.innerHTML = `<input type="checkbox" class="mr-1" data-value="${opt}" ${_selected.has(opt) ? 'checked' : ''}> <label class="flex-1">${opt}</label>`;
+      list.appendChild(li);
+    });
+  }
+  button.addEventListener('click', e => {
+    e.stopPropagation();
+    show ? close() : open();
+  });
+  document.addEventListener('click', e => { if (show && !container.contains(e.target)) close(); });
+  dropdown.querySelector('[data-action="checkall"]').addEventListener('click', e => {
+    _options.filter(opt => opt.toLowerCase().includes(filter.toLowerCase())).forEach(opt => _selected.add(opt));
+    updateList(); updateButton(); if (onChange) onChange(Array.from(_selected));
+  });
+  dropdown.querySelector('[data-action="uncheckall"]').addEventListener('click', e => {
+    _options.filter(opt => opt.toLowerCase().includes(filter.toLowerCase())).forEach(opt => _selected.delete(opt));
+    updateList(); updateButton(); if (onChange) onChange(Array.from(_selected));
+  });
+  if (search) {
+    dropdown.querySelector('input[type="search"]').addEventListener('input', e => {
+      filter = e.target.value;
+      updateList();
+    });
+  }
+  dropdown.querySelector('ul').addEventListener('change', e => {
+    if (e.target.matches('input[type="checkbox"]')) {
+      const val = e.target.getAttribute('data-value');
+      if (e.target.checked) _selected.add(val);
+      else _selected.delete(val);
+      updateButton();
+      if (onChange) onChange(Array.from(_selected));
+    }
+  });
+  updateButton();
+  updateList();
+  return {
+    setOptions: function(opts) {
+      _options = opts.slice();
+      _selected = new Set(Array.from(_selected).filter(x => _options.includes(x)));
+      updateList();
+      updateButton();
+    },
+    setSelected: function(vals) {
+      _selected = new Set(vals.filter(x => _options.includes(x)));
+      updateList();
+      updateButton();
+    },
+    getSelected: () => Array.from(_selected)
+  };
+}
+
+// === DASHBOARD LOGIC ===
+let weekLabels = [];
+let grouped = {};
+let allRows = [];
+let currentTab = "detail";
+let projectAppDropdown, releaseDropdown, resourceDropdown, weekDropdown;
+let filterState = {projectApp:[], release:[], resource:[], week:[]};
+
+fileInput.addEventListener('change', () => { processBtn.disabled = !fileInput.files.length; });
+clearBtn.addEventListener('click', () => { filterState = {projectApp:[], release:[], resource:[], week:[]}; populateFiltersCascading(); refresh(); });
+resetBtn.addEventListener('click', () => { filterState = {projectApp:[], release:[], resource:[], week:[]}; populateFiltersCascading(); refresh(); });
+tabDetail.addEventListener('click', () => {
+  currentTab = "detail";
+  tabDetail.classList.add('bg-blue-100','text-blue-800','border-b-2','border-blue-600');
+  tabDetail.classList.remove('text-gray-500','bg-gray-50','border-transparent');
+  tabProject.classList.remove('bg-blue-100','text-blue-800','border-b-2','border-blue-600');
+  tabProject.classList.add('text-gray-500','bg-gray-50','border-transparent');
+  detailView.classList.remove('hidden');
+  consolidatedView.classList.add('hidden');
+  refresh();
+});
+tabProject.addEventListener('click', () => {
+  currentTab = "consolidated";
+  tabProject.classList.add('bg-blue-100','text-blue-800','border-b-2','border-blue-600');
+  tabProject.classList.remove('text-gray-500','bg-gray-50','border-transparent');
+  tabDetail.classList.remove('bg-blue-100','text-blue-800','border-b-2','border-blue-600');
+  tabDetail.classList.add('text-gray-500','bg-gray-50','border-transparent');
+  detailView.classList.add('hidden');
+  consolidatedView.classList.remove('hidden');
+  refresh();
+});
+processBtn.addEventListener('click', () => {
+  if (!fileInput.files.length) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', sheetStubs: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const raw = XLSX.utils.sheet_to_json(ws, { defval: "" });
+    allRows = raw;
+    const headerRowNum = XLSX.utils.decode_range(ws['!ref']).s.r;
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    weekLabels = [];
+    for(let C=range.s.c; C<=range.e.c; ++C) {
+      const addr = XLSX.utils.encode_cell({r: headerRowNum, c:C});
+      const val = ws[addr] && ws[addr].v;
+      if (val && /^\(\d{1,2}\/\d{1,2}\/\d{4}-\d{1,2}\/\d{1,2}\/\d{4}\)$/.test(val)) {
+        weekLabels.push(val);
+      }
+    }
+    groupAndMatch(raw);
+    initUI();
+  };
+  reader.readAsArrayBuffer(fileInput.files[0]);
+});
+function extractRelease(str) {
+  if (!str) return '';
+  const relMatch = str.match(/(?:Release|Rel|V|v)?\s*([0-9]+(?:\.[0-9]+)+[^\s]*)/i);
+  if (relMatch) return relMatch[1];
+  return str;
+}
+function getRowProjectApp(row) {
+  return row['Project/Application'] || '';
+}
+function getRowProject(row) {
+  return row['Project'] || '';
+}
+function groupAndMatch(raw) {
+  grouped = {};
+  let perResourceWeek = {};
+  raw.forEach(row => {
+    const type = row['Type'] || '';
+    const resource = row['Resource Name'] || row['Resource'] || '';
+    const projectApp = getRowProjectApp(row) || '';
+    const project = getRowProject(row) || '';
+    const release = row['Project Release'] || row['Release'] || extractRelease(row['Project']) || extractRelease(row['Project/Application']) || '';
+    weekLabels.forEach(week => {
+      const hours = Number(row[week]) || 0;
+      if (!perResourceWeek[resource]) perResourceWeek[resource] = {};
+      if (!perResourceWeek[resource][week]) perResourceWeek[resource][week] = {};
+      if (!perResourceWeek[resource][week][projectApp]) perResourceWeek[resource][week][projectApp] = {forecast:[], actual:[]};
+      if (type === "Forecast Track" && hours > 0) {
+        perResourceWeek[resource][week][projectApp].forecast.push({project, release, hours, projectApp});
+      }
+      if (type === "WorkTrack" && hours > 0) {
+        perResourceWeek[resource][week][projectApp].actual.push({project, release, hours, projectApp});
+      }
+    });
+  });
+
+  // Group by resource > projectApp > week
+  Object.entries(perResourceWeek).forEach(([resource, weekMap]) => {
+    grouped[resource] = {};
+    Object.entries(weekMap).forEach(([week, projAppMap]) => {
+      Object.entries(projAppMap).forEach(([projectApp, obj]) => {
+        if (!grouped[resource][projectApp]) grouped[resource][projectApp] = [];
+        let forecast = obj.forecast.slice();
+        let actual = obj.actual.slice();
+        let actualUsed = new Array(actual.length).fill(false);
+        let details = [];
+        forecast.forEach((f, i) => {
+          // Match by Project code, NOT release or projectApp.
+          let ai = actual.findIndex((a, j) => !actualUsed[j] && a.project === f.project);
+          if (ai !== -1) {
+            let a = actual[ai];
+            actualUsed[ai] = true;
+            let flag = "";
+            if (f.release !== a.release) flag = "Project/Release Changed";
+            let diff = +(f.hours - a.hours).toFixed(2);
+            details.push({
+              forecastProject: f.project,
+              forecastRelease: f.release,
+              forecastHours: f.hours,
+              actualProject: a.project,
+              actualRelease: a.release,
+              actualHours: a.hours,
+              diff,
+              flag: flag || (diff !== 0 ? "Diff" : ""),
+              highlight: true
+            });
+          } else {
+            // No matching actual project
+            details.push({
+              forecastProject: f.project,
+              forecastRelease: f.release,
+              forecastHours: f.hours,
+              actualProject: "(none)",
+              actualRelease: "(none)",
+              actualHours: 0,
+              diff: f.hours,
+              flag: "No Actual Logged",
+              highlight: true
+            });
+          }
+        });
+        // Now handle unmatched actuals
+        actual.forEach((a, i) => {
+          if (!actualUsed[i]) {
+            details.push({
+              forecastProject: "(none)",
+              forecastRelease: "(none)",
+              forecastHours: 0,
+              actualProject: a.project,
+              actualRelease: a.release,
+              actualHours: a.hours,
+              diff: -a.hours,
+              flag: "No Forecast",
+              highlight: true
+            });
+          }
+        });
+        if (details.length)
+          grouped[resource][projectApp].push({
+            week, details
+          });
+      });
+    });
+  });
+}
+function getAllProjectApps() {
+  const apps = new Set();
+  allRows.forEach(row => {
+    const projectApp = getRowProjectApp(row);
+    if (projectApp) apps.add(projectApp);
+  });
+  return Array.from(apps);
+}
+function getAllReleases(selectedProjectApps) {
+  const releases = new Set();
+  allRows.forEach(row => {
+    const pApp = getRowProjectApp(row);
+    const release = row['Project Release'] || row['Release'] || extractRelease(row['Project']) || extractRelease(row['Project/Application']) || '';
+    if ((!selectedProjectApps.length || selectedProjectApps.includes(pApp)) && release) releases.add(release);
+  });
+  return Array.from(releases);
+}
+function getAllResources(selectedProjectApps, selectedReleases) {
+  const resources = new Set();
+  allRows.forEach(row => {
+    const pApp = getRowProjectApp(row);
+    const r = row['Project Release'] || row['Release'] || extractRelease(row['Project']) || extractRelease(row['Project/Application']) || '';
+    const name = row['Resource Name'] || row['Resource'] || '';
+    if (
+      (!selectedProjectApps.length || selectedProjectApps.includes(pApp)) &&
+      (!selectedReleases.length || selectedReleases.includes(r)) &&
+      name
+    ) resources.add(name);
+  });
+  return Array.from(resources);
+}
+function getAllWeeks(selectedProjectApps, selectedReleases, selectedResources) {
+  let weeks = new Set();
+  Object.entries(grouped).forEach(([res, projectAppMap]) => {
+    if (selectedResources.length && !selectedResources.includes(res)) return;
+    Object.entries(projectAppMap).forEach(([projectApp, weekRows]) => {
+      if (!selectedProjectApps.length || selectedProjectApps.includes(projectApp)) {
+        weekRows.forEach(weekRow => {
+          if (
+            weekRow.details.some(d =>
+              (!selectedReleases.length || selectedReleases.includes(d.forecastRelease) || selectedReleases.includes(d.actualRelease))
+            )
+          ) {
+            weeks.add(weekRow.week);
+          }
+        });
+      }
+    });
+  });
+  return Array.from(weeks);
+}
+function populateFiltersCascading() {
+  if (projectAppDropdown) projectAppDropdown.setOptions(getAllProjectApps());
+  else projectAppDropdown = createMultiSelectDropdown({
+    id: 'projectAppFilter',
+    options: getAllProjectApps(),
+    selected: filterState.projectApp,
+    placeholder: 'All Project/Applications',
+    onChange: arr => { filterState.projectApp = arr; populateFiltersCascading(); refresh(); }
+  });
+  if (releaseDropdown) releaseDropdown.setOptions(getAllReleases(filterState.projectApp));
+  else releaseDropdown = createMultiSelectDropdown({
+    id: 'releaseFilter',
+    options: getAllReleases(filterState.projectApp),
+    selected: filterState.release,
+    placeholder: 'All Releases',
+    onChange: arr => { filterState.release = arr; populateFiltersCascading(); refresh(); }
+  });
+  if (resourceDropdown) resourceDropdown.setOptions(getAllResources(filterState.projectApp, filterState.release));
+  else resourceDropdown = createMultiSelectDropdown({
+    id: 'resourceFilter',
+    options: getAllResources(filterState.projectApp, filterState.release),
+    selected: filterState.resource,
+    placeholder: 'All Resources',
+    onChange: arr => { filterState.resource = arr; populateFiltersCascading(); refresh(); }
+  });
+  if (weekDropdown) weekDropdown.setOptions(getAllWeeks(filterState.projectApp, filterState.release, filterState.resource));
+  else weekDropdown = createMultiSelectDropdown({
+    id: 'weekFilter',
+    options: getAllWeeks(filterState.projectApp, filterState.release, filterState.resource),
+    selected: filterState.week,
+    placeholder: 'All Weeks',
+    onChange: arr => { filterState.week = arr; refresh(); }
+  });
+  projectAppDropdown.setSelected(filterState.projectApp);
+  releaseDropdown.setSelected(filterState.release);
+  resourceDropdown.setSelected(filterState.resource);
+  weekDropdown.setSelected(filterState.week);
+}
+function initUI() {
+  filters.classList.remove('hidden');
+  detailView.classList.remove('hidden');
+  consolidatedView.classList.add('hidden');
+  document.getElementById('tabDetail').classList.add('bg-blue-100','text-blue-800','border-b-2','border-blue-600');
+  document.getElementById('tabProject').classList.remove('bg-blue-100','text-blue-800','border-b-2','border-blue-600');
+  populateFiltersCascading();
+  refresh();
+}
+function refresh() {
+  const pf = filterState.projectApp;
+  const relf = filterState.release;
+  const rf = filterState.resource;
+  const wf = filterState.week;
+  let data = Object.entries(grouped);
+  if (rf.length) data = data.filter(([name]) => rf.includes(name));
+  let sumForecast = 0, sumActual = 0;
+  if (currentTab === "detail") {
+    detailView.innerHTML = '';
+    data.forEach(([resource, projectAppMap]) => {
+      Object.entries(projectAppMap).forEach(([projectApp, weekRows]) => {
+        if (pf.length && !pf.includes(projectApp)) return;
+        let filteredWeekRows = weekRows.filter(weekRow =>
+          (!wf.length || wf.includes(weekRow.week)) &&
+          weekRow.details.some(d =>
+            (!relf.length || relf.includes(d.forecastRelease) || relf.includes(d.actualRelease))
+          )
+        );
+        if (!filteredWeekRows.length) return;
+        const sec = document.createElement('details');
+        sec.className = 'bg-gray-50 rounded-lg border shadow transition-all mb-2';
+        sec.innerHTML = `
+          <summary class="flex items-center px-4 py-2 cursor-pointer font-semibold text-lg text-blue-800 hover:bg-blue-50 rounded-t-lg">
+            <span>${resource}</span>
+            <span class="ml-2 text-xs bg-blue-100 px-2 py-0.5 rounded">${projectApp}</span>
+            <span class="ml-2 text-sm text-gray-500 font-normal">(${filteredWeekRows.length} weeks)</span>
+          </summary>`;
+        const list = document.createElement('div');
+        list.className = 'p-4 space-y-8';
+        filteredWeekRows.forEach(weekRow => {
+          const filteredDetails = weekRow.details.filter(d =>
+            (!relf.length || relf.includes(d.forecastRelease) || relf.includes(d.actualRelease))
+          );
+          if (!filteredDetails.length) return;
+          // Sums for only displayed details:
+          const weekForecast = filteredDetails.reduce((s, d) => s + d.forecastHours, 0);
+          const weekActual = filteredDetails.reduce((s, d) => s + d.actualHours, 0);
+          const weekDiff = +(weekForecast-weekActual).toFixed(2);
+          sumForecast += weekForecast;
+          sumActual += weekActual;
+          const weekCard = document.createElement('div');
+          weekCard.className = 'bg-gray-100 border-l-4 border-blue-400 p-4 rounded-lg';
+          weekCard.innerHTML = `
+            <div class="flex flex-col sm:flex-row sm:justify-between items-center">
+              <div class="font-semibold text-blue-900 text-base mb-2 sm:mb-0">Week: <span class="font-mono">${weekRow.week}</span></div>
+              <div class="flex flex-row gap-4 items-center">
+                <span class="text-xs bg-blue-200 text-blue-800 px-2 py-1 rounded">Total Forecast: <b>${weekForecast}</b></span>
+                <span class="text-xs bg-emerald-200 text-emerald-800 px-2 py-1 rounded">Total Actual: <b>${weekActual}</b></span>
+                <span class="text-xs px-2 py-1 rounded font-bold ${weekDiff!==0 ? 'bg-red-200 text-red-700':'bg-green-200 text-green-700'}">Diff: ${weekDiff}</span>
+              </div>
+            </div>
+            <div class="mt-3 space-y-2">
+              ${filteredDetails.map(d => `
+                <div class="bg-white border rounded-lg shadow p-3 flex flex-col sm:flex-row sm:justify-between items-center gap-3">
+                  <div>
+                    <div class="grid grid-cols-2 gap-2">
+                      <div>
+                        <div class="font-semibold text-sky-700 text-xs">Forecast</div>
+                        <div class="text-xs">Project: <span class="font-mono">${d.forecastProject}</span></div>
+                        <div class="text-xs">Release: <span class="font-mono">${d.forecastRelease}</span></div>
+                        <div class="font-bold text-blue-800 text-lg">${d.forecastHours}</div>
+                      </div>
+                      <div>
+                        <div class="font-semibold text-emerald-700 text-xs">Actual</div>
+                        <div class="text-xs">Project: <span class="font-mono">${d.actualProject}</span></div>
+                        <div class="text-xs">Release: <span class="font-mono">${d.actualRelease}</span></div>
+                        <div class="font-bold text-green-800 text-lg">${d.actualHours}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="flex flex-col items-center">
+                    <span class="inline-block text-xs px-2 py-1 rounded font-bold ${Math.abs(d.diff)>0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}">
+                      Diff: ${d.diff}
+                    </span>
+                    ${(d.flag && d.flag !== "Diff") ? `<span class="inline-block text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-700 mt-1">${d.flag}</span>` : ""}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          `;
+          list.appendChild(weekCard);
+        });
+        sec.appendChild(list);
+        detailView.appendChild(sec);
+      });
+    });
+  }
+  if (currentTab === "consolidated") {
+    consolidatedView.innerHTML = '';
+    let allDetails = [];
+    data.forEach(([resource, projectAppMap]) => {
+      Object.entries(projectAppMap).forEach(([projectApp, weekRows]) => {
+        if (pf.length && !pf.includes(projectApp)) return;
+        weekRows.forEach(weekRow => {
+          weekRow.details.forEach(d => {
+            if (
+              (!relf.length || relf.includes(d.forecastRelease) || relf.includes(d.actualRelease)) &&
+              (!wf.length || wf.includes(weekRow.week))
+            ) {
+              allDetails.push({ resource, projectApp, week: weekRow.week, ...d });
+            }
+          });
+        });
+      });
+    });
+    let byProjectApp = {};
+    allDetails.forEach(d => {
+      let projApp = d.projectApp || "(none)";
+      if (!byProjectApp[projApp]) byProjectApp[projApp] = {projectApp: projApp, forecast: 0, actual: 0, diff: 0, releases: new Set()};
+      byProjectApp[projApp].forecast += d.forecastHours;
+      byProjectApp[projApp].actual += d.actualHours;
+      byProjectApp[projApp].diff += d.diff;
+      if (d.forecastRelease !== "(none)") byProjectApp[projApp].releases.add(d.forecastRelease);
+      if (d.actualRelease !== "(none)") byProjectApp[projApp].releases.add(d.actualRelease);
+    });
+    let rows = Object.values(byProjectApp);
+    sumForecast = rows.reduce((s, r) => s + r.forecast, 0);
+    sumActual = rows.reduce((s, r) => s + r.actual, 0);
+    consolidatedView.innerHTML = `
+      <div class="overflow-x-auto">
+        <table class="min-w-full bg-white shadow rounded-lg">
+          <thead>
+            <tr class="bg-blue-50">
+              <th class="px-2 py-1 text-xs border">Project/Application</th>
+              <th class="px-2 py-1 text-xs border">Release(s)</th>
+              <th class="px-2 py-1 text-xs border">Total Forecast</th>
+              <th class="px-2 py-1 text-xs border">Total Actual</th>
+              <th class="px-2 py-1 text-xs border">Total Diff</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td class="border px-2 py-1 text-xs">${r.projectApp}</td>
+                <td class="border px-2 py-1 text-xs">${Array.from(r.releases).join(", ")}</td>
+                <td class="border px-2 py-1 text-xs font-bold text-blue-800">${r.forecast}</td>
+                <td class="border px-2 py-1 text-xs font-bold text-green-800">${r.actual}</td>
+                <td class="border px-2 py-1 text-xs font-bold ${r.diff!==0 ? 'text-red-700' : 'text-green-700'}">${r.diff}</td>
+              </tr>
+            `).join('')}
+            <tr class="bg-blue-50 font-extrabold">
+              <td class="border px-2 py-1 text-xs text-right" colspan="2">Total</td>
+              <td class="border px-2 py-1 text-xs text-blue-900">${sumForecast}</td>
+              <td class="border px-2 py-1 text-xs text-green-900">${sumActual}</td>
+              <td class="border px-2 py-1 text-xs ${sumForecast-sumActual!==0 ? 'text-red-700':'text-green-700'}">${(sumForecast-sumActual).toFixed(2)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+  totalForecast.textContent = `Forecast: ${sumForecast}`;
+  totalActual.textContent = `Actual: ${sumActual}`;
+  const diff = +(sumForecast - sumActual).toFixed(2);
+  totalDiff.textContent = `Diff: ${diff}`;
+  totalDiff.className = `text-xs px-2 py-1 rounded font-bold ${diff!==0 ? 'bg-red-200 text-red-700':'bg-green-200 text-green-700'}`;
+  summaryWidget.classList.remove('hidden');
+}
+</script>
+</body>
+</html>
