@@ -65,7 +65,7 @@
   </div>
 </div>
 <script>
-// -- Multiselect Dropdown (unchanged from previous, robust) --
+// ... Multi-select dropdown code unchanged, same as previous answers ...
 function createMultiSelectDropdown({id, options, selected, placeholder, onChange, search=true}) {
   const container = document.getElementById(id);
   container.innerHTML = '';
@@ -264,7 +264,6 @@ function groupAndMatch(raw) {
         let actualUsed = new Array(actual.length).fill(false);
         let details = [];
         forecast.forEach((f, i) => {
-          // Match by Project code, NOT release or projectApp.
           let ai = actual.findIndex((a, j) => !actualUsed[j] && a.project === f.project);
           if (ai !== -1) {
             let a = actual[ai];
@@ -284,7 +283,6 @@ function groupAndMatch(raw) {
               highlight: true
             });
           } else {
-            // No matching actual project
             details.push({
               forecastProject: f.project,
               forecastRelease: f.release,
@@ -298,7 +296,6 @@ function groupAndMatch(raw) {
             });
           }
         });
-        // Now handle unmatched actuals
         actual.forEach((a, i) => {
           if (!actualUsed[i]) {
             details.push({
@@ -431,6 +428,8 @@ function refresh() {
   if (currentTab === "detail") {
     detailView.innerHTML = '';
     data.forEach(([resource, projectAppMap]) => {
+      // Per-resource totals:
+      let perPersonForecast = 0, perPersonActual = 0;
       Object.entries(projectAppMap).forEach(([projectApp, weekRows]) => {
         if (pf.length && !pf.includes(projectApp)) return;
         let filteredWeekRows = weekRows.filter(weekRow =>
@@ -440,13 +439,28 @@ function refresh() {
           )
         );
         if (!filteredWeekRows.length) return;
+        // For this projectApp/person card, sum for visible weeks:
+        let personProjForecast = 0, personProjActual = 0;
+        filteredWeekRows.forEach(weekRow => {
+          const filteredDetails = weekRow.details.filter(d =>
+            (!relf.length || relf.includes(d.forecastRelease) || relf.includes(d.actualRelease))
+          );
+          personProjForecast += filteredDetails.reduce((s, d) => s + d.forecastHours, 0);
+          personProjActual += filteredDetails.reduce((s, d) => s + d.actualHours, 0);
+        });
+        perPersonForecast += personProjForecast;
+        perPersonActual += personProjActual;
+        sumForecast += personProjForecast;
+        sumActual += personProjActual;
         const sec = document.createElement('details');
         sec.className = 'bg-gray-50 rounded-lg border shadow transition-all mb-2';
         sec.innerHTML = `
           <summary class="flex items-center px-4 py-2 cursor-pointer font-semibold text-lg text-blue-800 hover:bg-blue-50 rounded-t-lg">
             <span>${resource}</span>
             <span class="ml-2 text-xs bg-blue-100 px-2 py-0.5 rounded">${projectApp}</span>
-            <span class="ml-2 text-sm text-gray-500 font-normal">(${filteredWeekRows.length} weeks)</span>
+            <span class="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">Forecast: <b>${personProjForecast}</b></span>
+            <span class="ml-2 text-xs bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">Actual: <b>${personProjActual}</b></span>
+            <span class="ml-2 text-xs px-2 py-0.5 rounded font-bold ${personProjForecast-personProjActual!==0 ? 'bg-red-200 text-red-700':'bg-green-200 text-green-700'}">Diff: ${(personProjForecast-personProjActual).toFixed(2)}</span>
           </summary>`;
         const list = document.createElement('div');
         list.className = 'p-4 space-y-8';
@@ -455,12 +469,9 @@ function refresh() {
             (!relf.length || relf.includes(d.forecastRelease) || relf.includes(d.actualRelease))
           );
           if (!filteredDetails.length) return;
-          // Sums for only displayed details:
           const weekForecast = filteredDetails.reduce((s, d) => s + d.forecastHours, 0);
           const weekActual = filteredDetails.reduce((s, d) => s + d.actualHours, 0);
           const weekDiff = +(weekForecast-weekActual).toFixed(2);
-          sumForecast += weekForecast;
-          sumActual += weekActual;
           const weekCard = document.createElement('div');
           weekCard.className = 'bg-gray-100 border-l-4 border-blue-400 p-4 rounded-lg';
           weekCard.innerHTML = `
